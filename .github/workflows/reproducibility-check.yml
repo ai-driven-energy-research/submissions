@@ -1,0 +1,304 @@
+name: Reproducibility Check
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  extract-repo:
+    if: contains(github.event.issue.labels.*.name, 'submission')
+    runs-on: ubuntu-latest
+    outputs:
+      repo_url: ${{ steps.extract.outputs.repo_url }}
+    steps:
+      - name: Extract repository URL from issue body
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body || '';
+            // Match GitHub repo URLs in the issue body
+            const match = body.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+/);
+            if (!match) {
+              core.setFailed('No GitHub repository URL found in submission issue.');
+              return;
+            }
+            const repoUrl = match[0].replace(/\/+$/, '');
+            core.setOutput('repo_url', repoUrl);
+            console.log(`Found repo URL: ${repoUrl}`);
+
+      - name: Post starting comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## Automated Reproducibility Check',
+                '',
+                '**Status:** Running...',
+                '',
+                `**Repository:** ${{ steps.extract.outputs.repo_url }}`,
+                '',
+                'The CI pipeline is now cloning the submission repository, installing dependencies, and executing `reproduce.sh`.',
+                '',
+                'This comment will be updated when the check completes.',
+              ].join('\n')
+            });
+
+  reproducibility-check:
+    needs: extract-repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Clone submission repository
+        run: |
+          git clone ${{ needs.extract-repo.outputs.repo_url }} submission
+          echo "REPO_CLONED=true" >> $GITHUB_ENV
+
+      - name: Check required structure
+        id: structure
+        working-directory: submission
+        run: |
+          echo "## Structure Check" > /tmp/structure_report.md
+          PASS=true
+
+          check_path() {
+            if [ -e "$1" ]; then
+              echo "- [x] \`$1\` exists" >> /tmp/structure_report.md
+            else
+              echo "- [ ] \`$1\` **MISSING**" >> /tmp/structure_report.md
+              PASS=false
+            fi
+          }
+
+          check_path "paper/"
+          check_path "code/"
+          check_path "code/README.md"
+          check_path "data/"
+          check_path "data/README.md"
+          check_path "process-log/"
+          check_path "process-log/README.md"
+          check_path "results/reproduce.sh"
+          check_path "REPRODUCIBILITY.md"
+          check_path "LICENSE"
+          check_path "README.md"
+
+          if [ "$PASS" = false ]; then
+            echo "STRUCTURE_PASS=false" >> $GITHUB_ENV
+          else
+            echo "STRUCTURE_PASS=true" >> $GITHUB_ENV
+          fi
+
+          cat /tmp/structure_report.md
+
+      - name: Check for dependency management
+        id: deps
+        working-directory: submission
+        run: |
+          echo "## Dependency Check" > /tmp/deps_report.md
+          FOUND=false
+
+          for f in code/requirements.txt code/environment.yml code/pyproject.toml code/setup.py Dockerfile docker-compose.yml; do
+            if [ -f "$f" ]; then
+              echo "- [x] Found \`$f\`" >> /tmp/deps_report.md
+              FOUND=true
+            fi
+          done
+
+          if [ "$FOUND" = false ]; then
+            echo "- [ ] **No dependency file found** (expected one of: requirements.txt, environment.yml, pyproject.toml, setup.py, Dockerfile)" >> /tmp/deps_report.md
+            echo "DEPS_FOUND=false" >> $GITHUB_ENV
+          else
+            echo "DEPS_FOUND=true" >> $GITHUB_ENV
+          fi
+
+          cat /tmp/deps_report.md
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        id: install
+        working-directory: submission
+        continue-on-error: true
+        run: |
+          echo "## Dependency Installation" > /tmp/install_report.md
+
+          if [ -f "code/requirements.txt" ]; then
+            echo "Installing from \`code/requirements.txt\`..." >> /tmp/install_report.md
+            pip install -r code/requirements.txt 2>&1 | tail -20 > /tmp/install_log.txt
+            if [ $? -eq 0 ]; then
+              echo "- [x] Dependencies installed successfully" >> /tmp/install_report.md
+              echo "INSTALL_PASS=true" >> $GITHUB_ENV
+            else
+              echo "- [ ] **Installation failed**" >> /tmp/install_report.md
+              echo '```' >> /tmp/install_report.md
+              cat /tmp/install_log.txt >> /tmp/install_report.md
+              echo '```' >> /tmp/install_report.md
+              echo "INSTALL_PASS=false" >> $GITHUB_ENV
+            fi
+          elif [ -f "code/pyproject.toml" ]; then
+            echo "Installing from \`code/pyproject.toml\`..." >> /tmp/install_report.md
+            pip install -e ./code 2>&1 | tail -20 > /tmp/install_log.txt
+            if [ $? -eq 0 ]; then
+              echo "- [x] Dependencies installed successfully" >> /tmp/install_report.md
+              echo "INSTALL_PASS=true" >> $GITHUB_ENV
+            else
+              echo "- [ ] **Installation failed**" >> /tmp/install_report.md
+              echo "INSTALL_PASS=false" >> $GITHUB_ENV
+            fi
+          else
+            echo "- [ ] No supported dependency file found, skipping installation" >> /tmp/install_report.md
+            echo "INSTALL_PASS=skipped" >> $GITHUB_ENV
+          fi
+
+          cat /tmp/install_report.md
+
+      - name: Run reproduce.sh
+        id: reproduce
+        working-directory: submission
+        continue-on-error: true
+        run: |
+          echo "## Reproducibility Execution" > /tmp/reproduce_report.md
+
+          if [ ! -f "results/reproduce.sh" ]; then
+            echo "- [ ] **\`results/reproduce.sh\` not found**" >> /tmp/reproduce_report.md
+            echo "REPRODUCE_PASS=false" >> $GITHUB_ENV
+          else
+            chmod +x results/reproduce.sh
+            echo "Running \`results/reproduce.sh\`..." >> /tmp/reproduce_report.md
+            timeout 3600 bash results/reproduce.sh > /tmp/reproduce_stdout.txt 2>&1
+            EXIT_CODE=$?
+
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "- [x] \`reproduce.sh\` completed successfully (exit code 0)" >> /tmp/reproduce_report.md
+              echo "REPRODUCE_PASS=true" >> $GITHUB_ENV
+            elif [ $EXIT_CODE -eq 124 ]; then
+              echo "- [ ] **\`reproduce.sh\` timed out** (exceeded 60 minute limit)" >> /tmp/reproduce_report.md
+              echo "REPRODUCE_PASS=false" >> $GITHUB_ENV
+            else
+              echo "- [ ] **\`reproduce.sh\` failed** (exit code $EXIT_CODE)" >> /tmp/reproduce_report.md
+              echo "REPRODUCE_PASS=false" >> $GITHUB_ENV
+            fi
+
+            echo "" >> /tmp/reproduce_report.md
+            echo "<details><summary>Output log (last 50 lines)</summary>" >> /tmp/reproduce_report.md
+            echo "" >> /tmp/reproduce_report.md
+            echo '```' >> /tmp/reproduce_report.md
+            tail -50 /tmp/reproduce_stdout.txt >> /tmp/reproduce_report.md
+            echo '```' >> /tmp/reproduce_report.md
+            echo "</details>" >> /tmp/reproduce_report.md
+          fi
+
+          cat /tmp/reproduce_report.md
+
+      - name: Check process log
+        id: process_log
+        working-directory: submission
+        run: |
+          echo "## Process Log Check" > /tmp/process_report.md
+
+          # Check if process-log has actual content (not just .gitkeep)
+          CONTENT_FILES=$(find process-log -type f ! -name '.gitkeep' | wc -l)
+
+          if [ "$CONTENT_FILES" -gt 1 ]; then
+            echo "- [x] Process log contains $CONTENT_FILES files" >> /tmp/process_report.md
+            echo "PROCESS_LOG_PASS=true" >> $GITHUB_ENV
+          else
+            echo "- [ ] **Process log appears empty or contains only templates**" >> /tmp/process_report.md
+            echo "PROCESS_LOG_PASS=false" >> $GITHUB_ENV
+          fi
+
+          # Check ai-sessions
+          AI_FILES=$(find process-log/ai-sessions -type f ! -name '.gitkeep' 2>/dev/null | wc -l)
+          echo "  - AI session files: $AI_FILES" >> /tmp/process_report.md
+
+          # Check human-decisions
+          HUMAN_FILES=$(find process-log/human-decisions -type f ! -name '.gitkeep' 2>/dev/null | wc -l)
+          echo "  - Human decision files: $HUMAN_FILES" >> /tmp/process_report.md
+
+          cat /tmp/process_report.md
+
+      - name: Post results to issue
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const readReport = (path) => {
+              try { return fs.readFileSync(path, 'utf8'); }
+              catch { return '*Report not generated*'; }
+            };
+
+            const structurePass = process.env.STRUCTURE_PASS === 'true';
+            const depsFound = process.env.DEPS_FOUND === 'true';
+            const installPass = process.env.INSTALL_PASS === 'true';
+            const reproducePass = process.env.REPRODUCE_PASS === 'true';
+            const processLogPass = process.env.PROCESS_LOG_PASS === 'true';
+
+            const allPass = structurePass && depsFound && installPass && reproducePass && processLogPass;
+
+            const status = allPass ? 'PASSED' : 'FAILED';
+            const emoji = allPass ? '\\u2705' : '\\u274c';
+
+            const body = [
+              `## Automated Reproducibility Check ${emoji}`,
+              '',
+              `**Overall Status: ${status}**`,
+              '',
+              `| Check | Result |`,
+              `|---|---|`,
+              `| Repository structure | ${structurePass ? '\\u2705 Pass' : '\\u274c Fail'} |`,
+              `| Dependency file found | ${depsFound ? '\\u2705 Pass' : '\\u274c Fail'} |`,
+              `| Dependencies install | ${installPass ? '\\u2705 Pass' : '\\u274c Fail'} |`,
+              `| \`reproduce.sh\` executes | ${reproducePass ? '\\u2705 Pass' : '\\u274c Fail'} |`,
+              `| Process log has content | ${processLogPass ? '\\u2705 Pass' : '\\u274c Fail'} |`,
+              '',
+              '---',
+              '',
+              readReport('/tmp/structure_report.md'),
+              '',
+              readReport('/tmp/deps_report.md'),
+              '',
+              readReport('/tmp/install_report.md'),
+              '',
+              readReport('/tmp/reproduce_report.md'),
+              '',
+              readReport('/tmp/process_report.md'),
+              '',
+              '---',
+              '',
+              '*This is an automated check by the AIDER reproducibility pipeline. Human review will follow.*',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+
+            // Add label based on result
+            const label = allPass ? 'reproducibility-passed' : 'reproducibility-failed';
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [label]
+            });
+        env:
+          STRUCTURE_PASS: ${{ env.STRUCTURE_PASS }}
+          DEPS_FOUND: ${{ env.DEPS_FOUND }}
+          INSTALL_PASS: ${{ env.INSTALL_PASS }}
+          REPRODUCE_PASS: ${{ env.REPRODUCE_PASS }}
+          PROCESS_LOG_PASS: ${{ env.PROCESS_LOG_PASS }}
