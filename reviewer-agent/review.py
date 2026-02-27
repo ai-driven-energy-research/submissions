@@ -1,14 +1,17 @@
 """
-AIDER AI Reviewer Agent
+AIDER AI Pre-Screening Agent
 
 Reads a submission repository (paper, code, data, process log) and generates
-a structured peer review using Gemini. Posts the review as a GitHub Issue comment.
+a pre-screening report highlighting key points for human editors to focus on.
+
+This is NOT a replacement for peer review. It performs basic checks, flags
+potential issues, and saves editors time by surfacing what matters.
 
 Usage:
     python review.py --repo-url <github-repo-url> --issue-number <n>
 
 Requires:
-    GEMINI_API_KEY - Google Gemini API key (free tier)
+    GROQ_API_KEY - Groq API key (free tier)
     GITHUB_TOKEN - GitHub token with issues:write permission
 """
 
@@ -82,6 +85,20 @@ def collect_submission_content(repo_dir: str) -> dict:
     if process_readme.exists():
         content["process_log"] = read_file(process_readme)
 
+    # AI session files
+    ai_sessions_dir = root / "process-log" / "ai-sessions"
+    if ai_sessions_dir.exists():
+        ai_files = [f for f in ai_sessions_dir.rglob("*") if f.is_file() and f.name != ".gitkeep"]
+        content["ai_session_count"] = len(ai_files)
+        if ai_files:
+            content["ai_session_sample"] = read_file(ai_files[0], max_chars=3000)
+
+    # Human decisions files
+    human_dir = root / "process-log" / "human-decisions"
+    if human_dir.exists():
+        human_files = [f for f in human_dir.rglob("*") if f.is_file() and f.name != ".gitkeep"]
+        content["human_decision_count"] = len(human_files)
+
     # Reproducibility checklist
     repro = root / "REPRODUCIBILITY.md"
     if repro.exists():
@@ -102,71 +119,78 @@ def collect_submission_content(repo_dir: str) -> dict:
     if readme.exists():
         content["readme"] = read_file(readme)
 
+    # Count files for stats
+    content["total_py_files"] = len(list((root / "code").rglob("*.py"))) if (root / "code").exists() else 0
+    content["total_data_files"] = len(list((root / "data").rglob("*"))) if (root / "data").exists() else 0
+
     return content
 
 
 def build_review_prompt(content: dict) -> str:
-    """Build the prompt for Claude to generate a review."""
+    """Build the prompt for the pre-screening report."""
     sections = []
 
-    sections.append("""You are an AI peer reviewer for AIDER (AI-Driven Energy Research), an open-access academic journal focused on AI applications in energy systems.
+    sections.append("""You are an AI pre-screening assistant for AIDER (AI-Driven Energy Research), an open-access academic journal for AI + energy research.
 
-You are reviewing a submission. Based on the materials provided below, generate a structured peer review. Be specific, cite exact sections/lines where possible, and be constructive.
+Your job is NOT to be the reviewer. Your job is to help the human editor by:
+1. Performing basic checks on completeness and quality
+2. Flagging potential issues or red flags the editor should investigate
+3. Highlighting the key claims and contributions so the editor can quickly understand the paper
+4. Checking code for obvious issues (hardcoded paths, missing error handling, suspicious patterns)
+5. Assessing whether the process log is substantive or just boilerplate
 
-Your review must follow this exact format:
+Generate a pre-screening report in this exact format:
 
-## AI Reviewer Report
+## AI Pre-Screening Report
 
-### Summary
-[2-3 sentence summary of the paper's contribution and your overall assessment]
+### Paper Summary
+[2-3 sentences: what is this paper about, what is the main contribution]
 
-### Methodology Assessment
-- **Approach:** [Is the methodology appropriate for the research question? Are assumptions clearly stated?]
-- **Technical correctness:** [Any errors, questionable assumptions, or missing justifications?]
-- **Novelty:** [Does this make a new contribution, or is it incremental/derivative?]
+### Key Claims
+[Bulleted list of the paper's main claims that the editor should verify during review]
 
-### Code Quality Assessment
-- **Readability:** [Is the code well-structured and documented?]
-- **Completeness:** [Does the code cover all claims in the paper?]
-- **Dependencies:** [Are dependencies reasonable and well-specified?]
-- **Reproducibility script:** [Does reproduce.sh appear to cover all key results?]
+### Completeness Check
+| Item | Status | Notes |
+|---|---|---|
+| Manuscript | Present/Missing | [any issues] |
+| Source code | Present/Missing | [file count, languages] |
+| Data | Present/Missing | [size, format, accessibility] |
+| Process log | Present/Missing | [substantive or boilerplate?] |
+| AI session logs | Present/Missing | [number of files, appears genuine?] |
+| Human decision log | Present/Missing | [number of entries] |
+| reproduce.sh | Present/Missing | [does it look complete?] |
+| Reproducibility checklist | Present/Missing | [all items checked?] |
 
-### Data Assessment
-- **Availability:** [Is data provided or linked?]
-- **Documentation:** [Is the data format and source described?]
-- **Sufficiency:** [Is there enough data to support the claims?]
+### Code Observations
+[Bulleted list of observations about the code — NOT a full code review, just things the editor should look at:]
+- Any hardcoded paths or credentials?
+- Are random seeds fixed?
+- Does the code structure match the methodology described in the paper?
+- Any obvious bugs or suspicious patterns?
+- Are there tests?
 
 ### Process Log Assessment
-- **AI tool documentation:** [Are AI tools and their usage documented?]
-- **Human decision documentation:** [Are key human decisions recorded?]
-- **Completeness:** [Could another researcher understand the full workflow?]
+[Is the process log substantive or just template boilerplate? Does it document real AI sessions and real human decisions, or is it generic filler? Be specific about what you found.]
 
-### Results Consistency
-- **Claims vs evidence:** [Do the results in the paper match what the code appears to produce?]
-- **Statistical validity:** [Are statistical claims supported? Are error bars / confidence intervals provided where needed?]
-- **Figures and tables:** [Do they appear to be generated by the provided code?]
+### Attention Points for Editor
+[Bulleted list of specific things the human editor should pay close attention to during their review. These are NOT judgements — they are flags:]
+- e.g., "Section 3.2 claims 15% improvement over baseline but the comparison code is not included"
+- e.g., "reproduce.sh only generates 2 of the 5 figures in the paper"
+- e.g., "Process log mentions GPT-4 was used but no session logs are provided"
+- e.g., "The dataset appears to be synthetic but this is not stated in the paper"
 
-### Strengths
-[Bulleted list of what the paper does well]
-
-### Weaknesses
-[Bulleted list of issues that need addressing]
-
-### Recommendations
-[Specific, actionable items for the authors]
-
-### Overall Recommendation
-[One of: **Accept**, **Minor Revision**, **Major Revision**, **Reject**]
-[Brief justification for the recommendation]
+### Scope Check
+[Does this paper fall within AIDER's scope (AI + energy systems)? Brief assessment.]
 
 ---
-*This review was generated by the AIDER AI Reviewer Agent (Gemini). Human editors will verify this assessment and make the final editorial decision. Authors may respond to any point raised.*
+*This is an automated pre-screening report, not a peer review. It is intended to help the editor prioritise their attention. The editor will conduct the full review and make all editorial decisions.*
 
-IMPORTANT:
-- Be fair and constructive. Point out strengths as well as weaknesses.
-- If you cannot assess something because the material is missing or truncated, say so explicitly.
-- Do not fabricate details. Only comment on what you can actually see in the provided materials.
-- Be specific: reference file names, line numbers, or section titles where relevant.""")
+IMPORTANT RULES:
+- You are a screening tool, NOT a reviewer. Do not make accept/reject recommendations.
+- Do not fabricate details. If material is missing or truncated, say so.
+- Be specific: reference file names, line numbers, or section titles.
+- Focus on factual observations, not opinions on quality.
+- If something looks suspicious, flag it neutrally — let the editor decide.""")
 
     if content.get("readme"):
         sections.append(f"\n---\n## README.md\n```\n{content['readme']}\n```")
@@ -178,7 +202,7 @@ IMPORTANT:
         sections.append(f"\n---\n## Code README\n```\n{content['code_readme']}\n```")
 
     if content.get("source_files"):
-        sections.append("\n---\n## Source Code Files")
+        sections.append(f"\n---\n## Source Code Files ({content.get('total_py_files', '?')} .py files total, showing up to 10)")
         for sf in content["source_files"]:
             sections.append(f"\n### {sf['path']}\n```python\n{sf['content']}\n```")
 
@@ -192,7 +216,13 @@ IMPORTANT:
         sections.append(f"\n---\n## Data README\n```\n{content['data_readme']}\n```")
 
     if content.get("process_log"):
-        sections.append(f"\n---\n## Process Log\n```\n{content['process_log']}\n```")
+        sections.append(f"\n---\n## Process Log README\n```\n{content['process_log']}\n```")
+
+    sections.append(f"\n---\n## Process Log Stats")
+    sections.append(f"- AI session files: {content.get('ai_session_count', 0)}")
+    sections.append(f"- Human decision files: {content.get('human_decision_count', 0)}")
+    if content.get("ai_session_sample"):
+        sections.append(f"\n### Sample AI session (first file)\n```\n{content['ai_session_sample']}\n```")
 
     if content.get("reproducibility_checklist"):
         sections.append(f"\n---\n## Reproducibility Checklist\n```\n{content['reproducibility_checklist']}\n```")
@@ -201,15 +231,17 @@ IMPORTANT:
 
 
 def call_llm(prompt: str) -> str:
-    """Send prompt to Gemini and get the review."""
-    from google import genai
+    """Send prompt to Groq and get the pre-screening report."""
+    from groq import Groq
 
-    client = genai.Client()
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
+    client = Groq()
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=4096,
+        temperature=0.3,
     )
-    return response.text
+    return response.choices[0].message.content
 
 
 def post_github_comment(issue_number: int, body: str):
@@ -228,14 +260,14 @@ def post_github_comment(issue_number: int, body: str):
         json={"body": body},
     )
     resp.raise_for_status()
-    print(f"Posted review to issue #{issue_number}")
+    print(f"Posted pre-screening report to issue #{issue_number}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AIDER AI Reviewer Agent")
+    parser = argparse.ArgumentParser(description="AIDER AI Pre-Screening Agent")
     parser.add_argument("--repo-url", required=True, help="GitHub repo URL to review")
     parser.add_argument("--issue-number", type=int, required=True, help="Submission issue number")
-    parser.add_argument("--dry-run", action="store_true", help="Print review to stdout instead of posting")
+    parser.add_argument("--dry-run", action="store_true", help="Print report to stdout instead of posting")
     args = parser.parse_args()
 
     # Clone
@@ -253,15 +285,15 @@ def main():
     if not content.get("manuscript"):
         print("WARNING: No manuscript found in paper/", file=sys.stderr)
 
-    # Build prompt and call Gemini
-    print("Generating review with Gemini...")
+    # Build prompt and call LLM
+    print("Generating pre-screening report...")
     prompt = build_review_prompt(content)
-    review = call_llm(prompt)
+    report = call_llm(prompt)
 
     if args.dry_run:
-        print("\n" + review)
+        print("\n" + report)
     else:
-        post_github_comment(args.issue_number, review)
+        post_github_comment(args.issue_number, report)
 
     # Cleanup
     subprocess.run(["rm", "-rf", clone_dir], check=False)

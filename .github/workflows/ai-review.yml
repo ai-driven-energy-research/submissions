@@ -1,4 +1,4 @@
-name: AI Reviewer Agent
+name: AI Pre-Screening
 
 on:
   issues:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  ai-review:
+  ai-prescreen:
     if: github.event.label.name == 'reproducibility-passed'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -38,7 +38,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '## AI Reviewer Agent\n\n**Status:** Running...\n\nThe AI reviewer is reading the submission and generating a structured review. This typically takes 1-2 minutes.'
+              body: '## AI Pre-Screening\n\n**Status:** Running...\n\nThe AI pre-screening agent is reading the submission and generating a report for the editor. This typically takes 1-2 minutes.'
             });
 
       - name: Set up Python
@@ -46,12 +46,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install reviewer agent dependencies
+      - name: Install dependencies
         run: pip install -r reviewer-agent/requirements.txt
 
-      - name: Run AI reviewer
+      - name: Run AI pre-screening
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python reviewer-agent/review.py \
@@ -67,7 +67,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              labels: ['ai-reviewed']
+              labels: ['ai-prescreened']
             });
 
       - name: Post failure comment
@@ -79,5 +79,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '## AI Reviewer Agent\n\n**Status:** Failed\n\nThe AI reviewer encountered an error. An editor will review this submission manually.\n\nCheck the [workflow run](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions) for details.'
+              body: '## AI Pre-Screening\n\n**Status:** Failed\n\nThe pre-screening agent encountered an error. An editor will review this submission directly.\n\nCheck the [workflow run](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions) for details.'
             });
