@@ -1,0 +1,12 @@
+name: General Inquiry
+description: Ask a question about AIDER or the submission process
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: "What would you like to know?"
+    validations:
+      required: true

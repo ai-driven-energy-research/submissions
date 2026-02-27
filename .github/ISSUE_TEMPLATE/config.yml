@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Journal Website
+    url: https://ai-driven-energy-research.github.io
+    about: Visit the AIDER journal website for scope, guidelines, and published papers
+  - name: Paper Template
+    url: https://github.com/ai-driven-energy-research/paper-template
+    about: Use this template to prepare your submission

@@ -1,0 +1,104 @@
+name: Paper Submission
+description: Submit a paper to AIDER for review
+title: "[Submission] "
+labels: ["submission", "awaiting-editor"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for submitting to **AI-Driven Energy Research (AIDER)**.
+        Please fill in all fields below. Incomplete submissions will not be reviewed.
+
+  - type: input
+    id: title
+    attributes:
+      label: Paper Title
+      placeholder: "e.g., Physics-Informed Neural Networks for Turbulent Flow Prediction in Draft Tubes"
+    validations:
+      required: true
+
+  - type: textarea
+    id: authors
+    attributes:
+      label: Authors
+      description: "List all authors with affiliations and email"
+      placeholder: |
+        1. Jianou Jiang — University of Oxford — jianou.jiang@eng.ox.ac.uk
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: abstract
+    attributes:
+      label: Abstract
+      description: "150-300 words"
+    validations:
+      required: true
+
+  - type: input
+    id: repo
+    attributes:
+      label: Paper Repository URL
+      description: "Public GitHub repo created from the AIDER paper-template"
+      placeholder: "https://github.com/your-username/your-paper-repo"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      description: "Confirm that your repo meets AIDER requirements"
+      options:
+        - label: "Paper manuscript is included in `paper/`"
+          required: true
+        - label: "All source code is in `code/` with a working README"
+          required: true
+        - label: "Data is available (in `data/` or via persistent link with DOI)"
+          required: true
+        - label: "Process log is in `process-log/` with AI sessions and human decisions documented"
+          required: true
+        - label: "`results/reproduce.sh` regenerates key results from the paper"
+          required: true
+        - label: "REPRODUCIBILITY.md checklist is completed"
+          required: true
+        - label: "Licenses are set (CC-BY 4.0 for paper, MIT/Apache for code)"
+          required: true
+
+  - type: textarea
+    id: ai-tools
+    attributes:
+      label: AI Tools Used
+      description: "List all AI tools used in producing this paper and how they were used"
+      placeholder: |
+        - Claude (via paper-factory): drafting, code generation, literature search
+        - GitHub Copilot: code completion
+    validations:
+      required: true
+
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Primary Topic Area
+      options:
+        - Machine learning for CFD
+        - AI-driven grid optimisation
+        - Reinforcement learning for energy control
+        - Generative models for materials discovery
+        - LLM-assisted research workflows
+        - Autonomous energy system design
+        - Physics-informed neural networks
+        - AI for renewable energy forecasting
+        - Other (specify in additional notes)
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes
+      description: "Anything else the editor should know"
+      placeholder: "Optional"
+    validations:
+      required: false
