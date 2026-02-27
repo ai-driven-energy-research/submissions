@@ -1,0 +1,83 @@
+name: AI Reviewer Agent
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  ai-review:
+    if: github.event.label.name == 'reproducibility-passed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout submissions repo
+        uses: actions/checkout@v4
+
+      - name: Extract repository URL from issue body
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body || '';
+            const match = body.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+/);
+            if (!match) {
+              core.setFailed('No GitHub repository URL found in submission issue.');
+              return;
+            }
+            core.setOutput('repo_url', match[0].replace(/\/+$/, ''));
+
+      - name: Post starting comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '## AI Reviewer Agent\n\n**Status:** Running...\n\nThe AI reviewer is reading the submission and generating a structured review. This typically takes 1-2 minutes.'
+            });
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install reviewer agent dependencies
+        run: pip install -r reviewer-agent/requirements.txt
+
+      - name: Run AI reviewer
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python reviewer-agent/review.py \
+            --repo-url "${{ steps.extract.outputs.repo_url }}" \
+            --issue-number "${{ github.event.issue.number }}"
+
+      - name: Add label
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['ai-reviewed']
+            });
+
+      - name: Post failure comment
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '## AI Reviewer Agent\n\n**Status:** Failed\n\nThe AI reviewer encountered an error. An editor will review this submission manually.\n\nCheck the [workflow run](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions) for details.'
+            });
