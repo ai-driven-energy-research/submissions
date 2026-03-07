@@ -19,15 +19,18 @@ Your repo must include:
 
 Click **[New Issue](../../issues/new/choose)** and select **"Paper Submission"**. Fill in the template with your paper details and a link to your repository.
 
-### Step 3: Review
+### Step 3: Automated Review
 
-An editor will assign two reviewers. All review happens publicly:
-- **Track A:** Scientific merit
-- **Track B:** Reproducibility (reviewer runs your code — hard gate)
+Three AI agents run automatically on your submission:
+1. **Reproducibility Check** — verifies repo structure, installs dependencies, runs `reproduce.sh`
+2. **AI Pre-Screening** — summarises the paper, checks completeness, flags attention points
+3. **AI Deep Review** — audits bold claims (e.g. "first ever", "novel") and checks reference accessibility (flags paywalled sources)
 
-Reviews are open and signed. AI-assisted review is allowed with disclosure.
+### Step 4: Editorial Decision
 
-### Step 4: Acceptance
+An editor reviews the AI reports and the submission, then makes the final decision. All review happens publicly and is signed. Additional human reviewers may be invited at the editor's discretion.
+
+### Step 5: Acceptance
 
 Once accepted, your repo is forked into the [ai-driven-energy-research](https://github.com/ai-driven-energy-research) org and listed on the [journal website](https://ai-driven-energy-research.github.io).
 
