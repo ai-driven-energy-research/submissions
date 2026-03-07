@@ -1,8 +1,9 @@
 name: AI Pre-Screening
 
 on:
-  issues:
-    types: [labeled]
+  workflow_run:
+    workflows: ["Reproducibility Check"]
+    types: [completed]
 
 permissions:
   issues: write
@@ -10,74 +11,127 @@ permissions:
 
 jobs:
   ai-prescreen:
-    if: github.event.label.name == 'reproducibility-passed'
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout submissions repo
         uses: actions/checkout@v4
 
-      - name: Extract repository URL from issue body
-        id: extract
+      - name: Get issue details from triggering workflow
+        id: issue
         uses: actions/github-script@v7
         with:
           script: |
-            const body = context.payload.issue.body || '';
-            const match = body.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+/);
-            if (!match) {
-              core.setFailed('No GitHub repository URL found in submission issue.');
+            // The workflow_run event doesn't directly give us the issue.
+            // But the triggering workflow was on an issues event, so we can
+            // find the issue from the workflow run's head branch or title.
+            // The run title contains the issue title. We search for it.
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'reproducibility-check.yml',
+              status: 'completed',
+              per_page: 1
+            });
+
+            if (runs.data.workflow_runs.length === 0) {
+              core.setFailed('No completed reproducibility check runs found.');
               return;
             }
+
+            // Get the jobs for this run to find the issue number from the logs
+            // Instead, search for open issues with the 'reproducibility-passed' label
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'reproducibility-passed',
+              state: 'open',
+              sort: 'updated',
+              direction: 'desc',
+              per_page: 1
+            });
+
+            if (issues.data.length === 0) {
+              core.setFailed('No open issue with reproducibility-passed label found.');
+              return;
+            }
+
+            const issue = issues.data[0];
+
+            // Skip if already pre-screened
+            const hasLabel = issue.labels.some(l => l.name === 'ai-prescreened');
+            if (hasLabel) {
+              console.log(`Issue #${issue.number} already pre-screened, skipping.`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            // Extract repo URL from issue body
+            const body = issue.body || '';
+            const match = body.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+/);
+            if (!match) {
+              core.setFailed('No GitHub repository URL found in issue body.');
+              return;
+            }
+
+            core.setOutput('skip', 'false');
+            core.setOutput('issue_number', issue.number.toString());
             core.setOutput('repo_url', match[0].replace(/\/+$/, ''));
+            console.log(`Found issue #${issue.number}, repo: ${match[0]}`);
 
       - name: Post starting comment
+        if: steps.issue.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: parseInt('${{ steps.issue.outputs.issue_number }}'),
               body: '## AI Pre-Screening\n\n**Status:** Running...\n\nThe AI pre-screening agent is reading the submission and generating a report for the editor. This typically takes 1-2 minutes.'
             });
 
       - name: Set up Python
+        if: steps.issue.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.issue.outputs.skip != 'true'
         run: pip install -r reviewer-agent/requirements.txt
 
       - name: Run AI pre-screening
+        if: steps.issue.outputs.skip != 'true'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python reviewer-agent/review.py \
-            --repo-url "${{ steps.extract.outputs.repo_url }}" \
-            --issue-number "${{ github.event.issue.number }}"
+            --repo-url "${{ steps.issue.outputs.repo_url }}" \
+            --issue-number "${{ steps.issue.outputs.issue_number }}"
 
       - name: Add label
-        if: success()
+        if: success() && steps.issue.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: parseInt('${{ steps.issue.outputs.issue_number }}'),
               labels: ['ai-prescreened']
             });
 
       - name: Post failure comment
-        if: failure()
+        if: failure() && steps.issue.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: parseInt('${{ steps.issue.outputs.issue_number }}'),
               body: '## AI Pre-Screening\n\n**Status:** Failed\n\nThe pre-screening agent encountered an error. An editor will review this submission directly.\n\nCheck the [workflow run](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions) for details.'
             });
