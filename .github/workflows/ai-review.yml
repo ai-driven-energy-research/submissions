@@ -1,4 +1,4 @@
-name: AI Pre-Screening
+name: AI Review Pipeline
 
 on:
   workflow_run:
@@ -14,6 +14,10 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      issue_number: ${{ steps.issue.outputs.issue_number }}
+      repo_url: ${{ steps.issue.outputs.repo_url }}
+      skip: ${{ steps.issue.outputs.skip }}
     steps:
       - name: Checkout submissions repo
         uses: actions/checkout@v4
@@ -134,4 +138,65 @@ jobs:
               repo: context.repo.repo,
               issue_number: parseInt('${{ steps.issue.outputs.issue_number }}'),
               body: '## AI Pre-Screening\n\n**Status:** Failed\n\nThe pre-screening agent encountered an error. An editor will review this submission directly.\n\nCheck the [workflow run](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions) for details.'
+            });
+
+  ai-deep-review:
+    needs: ai-prescreen
+    if: needs.ai-prescreen.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout submissions repo
+        uses: actions/checkout@v4
+
+      - name: Post starting comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt('${{ needs.ai-prescreen.outputs.issue_number }}'),
+              body: '## AI Deep Review\n\n**Status:** Running...\n\nThe AI agent is reading the full manuscript to check bold claims and reference accessibility. This typically takes 1-3 minutes.'
+            });
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r reviewer-agent/requirements.txt
+
+      - name: Run deep review
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python reviewer-agent/deep_review.py \
+            --repo-url "${{ needs.ai-prescreen.outputs.repo_url }}" \
+            --issue-number "${{ needs.ai-prescreen.outputs.issue_number }}"
+
+      - name: Add label
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt('${{ needs.ai-prescreen.outputs.issue_number }}'),
+              labels: ['ai-reviewed']
+            });
+
+      - name: Post failure comment
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt('${{ needs.ai-prescreen.outputs.issue_number }}'),
+              body: '## AI Deep Review\n\n**Status:** Failed\n\nThe deep review agent encountered an error. The editor will review this submission without the automated claim/reference audit.\n\nCheck the [workflow run](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions) for details.'
             });
