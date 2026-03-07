@@ -1,0 +1,231 @@
+name: Publish Accepted Paper
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  publish:
+    if: github.event.label.name == 'accepted'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Extract submission details from issue
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+
+            // Extract repo URL
+            const repoMatch = body.match(/https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)/);
+            if (!repoMatch) {
+              core.setFailed('No GitHub repository URL found in issue body.');
+              return;
+            }
+            const repoOwner = repoMatch[1];
+            const repoName = repoMatch[2];
+            core.setOutput('repo_owner', repoOwner);
+            core.setOutput('repo_name', repoName);
+            core.setOutput('repo_full', `${repoOwner}/${repoName}`);
+
+            // Extract paper title
+            const titleMatch = body.match(/### Paper Title\s*\n\s*(.+)/);
+            const paperTitle = titleMatch ? titleMatch[1].trim() : issue.title.replace(/\[.*?\]\s*/, '');
+            core.setOutput('paper_title', paperTitle);
+
+            // Extract authors
+            const authorsMatch = body.match(/### Authors\s*\n([\s\S]*?)(?=\n###)/);
+            const authors = authorsMatch ? authorsMatch[1].trim() : 'See repository';
+            core.setOutput('authors', authors);
+
+            core.setOutput('issue_number', issue.number.toString());
+            console.log(`Paper: ${paperTitle}`);
+            console.log(`Repo: ${repoOwner}/${repoName}`);
+
+      - name: Fork repo into org
+        id: fork
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+          script: |
+            const org = 'ai-driven-energy-research';
+            const owner = '${{ steps.extract.outputs.repo_owner }}';
+            const repo = '${{ steps.extract.outputs.repo_name }}';
+
+            // Check if fork already exists
+            try {
+              await github.rest.repos.get({ owner: org, repo: repo });
+              console.log(`Fork ${org}/${repo} already exists, skipping.`);
+              core.setOutput('fork_url', `https://github.com/${org}/${repo}`);
+              return;
+            } catch (e) {
+              // 404 = doesn't exist yet, proceed with fork
+            }
+
+            const result = await github.rest.repos.createFork({
+              owner: owner,
+              repo: repo,
+              organization: org,
+            });
+
+            console.log(`Forked to: ${result.data.html_url}`);
+            core.setOutput('fork_url', result.data.html_url);
+
+            // Wait for fork to be ready
+            await new Promise(r => setTimeout(r, 10000));
+
+      - name: Create release on the fork
+        id: release
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+          script: |
+            const org = 'ai-driven-energy-research';
+            const repo = '${{ steps.extract.outputs.repo_name }}';
+            const title = '${{ steps.extract.outputs.paper_title }}';
+            const issueNum = '${{ steps.extract.outputs.issue_number }}';
+
+            // Check if release already exists
+            try {
+              const releases = await github.rest.repos.listReleases({
+                owner: org, repo: repo, per_page: 1
+              });
+              if (releases.data.length > 0) {
+                console.log('Release already exists, skipping.');
+                core.setOutput('release_url', releases.data[0].html_url);
+                return;
+              }
+            } catch (e) {
+              // no releases yet
+            }
+
+            // Get default branch
+            const repoData = await github.rest.repos.get({ owner: org, repo: repo });
+            const defaultBranch = repoData.data.default_branch;
+
+            const release = await github.rest.repos.createRelease({
+              owner: org,
+              repo: repo,
+              tag_name: 'v1.0.0',
+              name: `AIDER Publication: ${title}`,
+              body: [
+                `## ${title}`,
+                '',
+                `Published in AI-Driven Energy Research (AIDER).`,
+                '',
+                `**Submission issue:** https://github.com/ai-driven-energy-research/submissions/issues/${issueNum}`,
+                '',
+                `This release is the accepted version of the paper. If Zenodo integration is enabled, a DOI will be assigned automatically.`,
+              ].join('\n'),
+              target_commitish: defaultBranch,
+            });
+
+            console.log(`Release created: ${release.data.html_url}`);
+            core.setOutput('release_url', release.data.html_url);
+
+      - name: Update journal website
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
+          script: |
+            const org = 'ai-driven-energy-research';
+            const websiteRepo = 'ai-driven-energy-research.github.io';
+            const repo = '${{ steps.extract.outputs.repo_name }}';
+            const title = '${{ steps.extract.outputs.paper_title }}';
+            const authors = `${{ steps.extract.outputs.authors }}`;
+            const forkUrl = '${{ steps.fork.outputs.fork_url }}';
+
+            // Read current index.html
+            const file = await github.rest.repos.getContent({
+              owner: org, repo: websiteRepo,
+              path: 'index.html',
+            });
+
+            let content = Buffer.from(file.data.content, 'base64').toString('utf8');
+
+            // Build the paper entry
+            const firstAuthor = authors.split('\n')[0].replace(/^\d+\.\s*/, '').split(' — ')[0].trim();
+            const paperEntry = `
+        <div class="board-member" style="margin-top:12px;">
+            <div class="board-role">Vol. 1, 2026</div>
+            <div class="name">${title}</div>
+            <div class="affiliation">${firstAuthor}</div>
+            <div style="margin-top:8px; font-family:'Inter',sans-serif; font-size:0.82em;">
+                <a href="${forkUrl}">Repository</a> · <a href="${forkUrl}/blob/main/paper/main.pdf">PDF</a> · <a href="${forkUrl}/tree/main/process-log">Process Log</a>
+            </div>
+        </div>`;
+
+            // Replace the "papers-empty" placeholder with the actual paper
+            if (content.includes('papers-empty')) {
+              content = content.replace(
+                /<div class="papers-empty">[\s\S]*?<\/div>/,
+                paperEntry
+              );
+            } else if (!content.includes(title)) {
+              // Add after the Published Papers section-lead paragraph
+              content = content.replace(
+                /(<p class="section-lead">Each paper is a GitHub repository[\s\S]*?<\/p>)/,
+                `$1\n${paperEntry}`
+              );
+            }
+
+            // Commit the update
+            await github.rest.repos.createOrUpdateFileContents({
+              owner: org,
+              repo: websiteRepo,
+              path: 'index.html',
+              message: `Add published paper: ${title}`,
+              content: Buffer.from(content).toString('base64'),
+              sha: file.data.sha,
+            });
+
+            console.log('Website updated with new paper listing.');
+
+      - name: Post publication comment and close issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const forkUrl = '${{ steps.fork.outputs.fork_url }}';
+            const releaseUrl = '${{ steps.release.outputs.release_url }}';
+            const title = '${{ steps.extract.outputs.paper_title }}';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## Paper Published',
+                '',
+                `**${title}**`,
+                '',
+                `| Item | Link |`,
+                `|---|---|`,
+                `| Official repository | ${forkUrl} |`,
+                `| Release | ${releaseUrl || 'Pending'} |`,
+                `| Journal website | https://ai-driven-energy-research.github.io |`,
+                `| Zenodo DOI | Will be assigned automatically if Zenodo integration is enabled |`,
+                '',
+                'The paper has been forked into the AIDER organisation, a release has been created, and the journal website has been updated.',
+                '',
+                'Congratulations to the author!',
+                '',
+                '---',
+                '*This is an automated publication action triggered by the `accepted` label.*',
+              ].join('\n')
+            });
+
+            // Close the issue
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+            });
+
+            console.log('Issue closed.');
