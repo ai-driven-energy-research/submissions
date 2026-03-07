@@ -31,7 +31,7 @@ def clone_repo(url: str, dest: str) -> bool:
     return result.returncode == 0
 
 
-def read_file(path: Path, max_chars: int = 15000) -> str:
+def read_file(path: Path, max_chars: int = 6000) -> str:
     """Read a file, truncating if too long."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -60,15 +60,15 @@ def collect_submission_content(repo_dir: str) -> dict:
     if code_readme.exists():
         content["code_readme"] = read_file(code_readme)
 
-    # Collect source files (up to 10, prioritise .py files)
+    # Collect source files (up to 5, prioritise .py files)
     source_files = []
     code_dir = root / "code"
     if code_dir.exists():
-        py_files = sorted(code_dir.rglob("*.py"))[:10]
+        py_files = sorted(code_dir.rglob("*.py"))[:5]
         for f in py_files:
             source_files.append({
                 "path": str(f.relative_to(root)),
-                "content": read_file(f, max_chars=5000)
+                "content": read_file(f, max_chars=2000)
             })
     content["source_files"] = source_files
 
@@ -76,7 +76,7 @@ def collect_submission_content(repo_dir: str) -> dict:
     for dep_file in ["code/requirements.txt", "code/pyproject.toml", "code/environment.yml"]:
         dep_path = root / dep_file
         if dep_path.exists():
-            content["dependencies"] = read_file(dep_path, max_chars=3000)
+            content["dependencies"] = read_file(dep_path, max_chars=1500)
             content["dependencies_file"] = dep_file
             break
 
@@ -91,7 +91,7 @@ def collect_submission_content(repo_dir: str) -> dict:
         ai_files = [f for f in ai_sessions_dir.rglob("*") if f.is_file() and f.name != ".gitkeep"]
         content["ai_session_count"] = len(ai_files)
         if ai_files:
-            content["ai_session_sample"] = read_file(ai_files[0], max_chars=3000)
+            content["ai_session_sample"] = read_file(ai_files[0], max_chars=1500)
 
     # Human decisions files
     human_dir = root / "process-log" / "human-decisions"
@@ -107,7 +107,7 @@ def collect_submission_content(repo_dir: str) -> dict:
     # reproduce.sh
     reproduce_sh = root / "results" / "reproduce.sh"
     if reproduce_sh.exists():
-        content["reproduce_script"] = read_file(reproduce_sh, max_chars=3000)
+        content["reproduce_script"] = read_file(reproduce_sh, max_chars=1500)
 
     # Data README
     data_readme = root / "data" / "README.md"
