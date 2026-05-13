@@ -255,12 +255,12 @@ jobs:
               '        </div>',
             ].join('\n');
 
+            const originalContent = content;
+
             // Replace empty placeholder or append after existing papers
-            if (content.includes('papers-empty')) {
-              content = content.replace(
-                /<div class="papers-empty">[\s\S]*?<\/div>/,
-                paperEntry
-              );
+            const emptyPapersPattern = /<div class="papers-empty">[\s\S]*?<\/div>/;
+            if (emptyPapersPattern.test(content)) {
+              content = content.replace(emptyPapersPattern, paperEntry);
             } else {
               // Append before the closing tags of the papers container
               const marker = '<!-- end-papers -->';
@@ -273,6 +273,11 @@ jobs:
                   `$1\n${paperEntry}`
                 );
               }
+            }
+
+            if (content === originalContent) {
+              core.setFailed('Could not locate the published-papers insertion point in index.html.');
+              return;
             }
 
             await github.rest.repos.createOrUpdateFileContents({
