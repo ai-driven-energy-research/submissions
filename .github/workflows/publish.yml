@@ -3,33 +3,84 @@ name: Publish Accepted Paper
 on:
   issues:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Submission issue number to publish'
+        required: true
+        type: number
 
 permissions:
   issues: write
   contents: read
 
+concurrency:
+  group: publish-accepted-paper
+  cancel-in-progress: false
+
 jobs:
   publish:
-    if: github.event.label.name == 'accepted'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'accepted'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Extract submission details from issue
         id: extract
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
-            const issue = context.payload.issue;
+            let issue;
+            if (context.eventName === 'workflow_dispatch') {
+              const issueNumber = Number(core.getInput('issue_number'));
+              if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+                core.setFailed(`Invalid issue_number input: ${core.getInput('issue_number')}`);
+                return;
+              }
+              const response = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+              });
+              issue = response.data;
+            } else {
+              issue = context.payload.issue;
+            }
+
+            const labels = (issue.labels || []).map(label =>
+              typeof label === 'string' ? label : label.name
+            );
+            if (!labels.includes('accepted')) {
+              core.setFailed(`Issue #${issue.number} is not labelled accepted.`);
+              return;
+            }
+
             const body = issue.body || '';
 
             // Extract repo URL
-            const repoMatch = body.match(/https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)/);
-            if (!repoMatch) {
+            const repoUrlMatch = body.match(/https:\/\/github\.com\/[^\s)>\]]+/);
+            if (!repoUrlMatch) {
               core.setFailed('No GitHub repository URL found in issue body.');
               return;
             }
-            const repoOwner = repoMatch[1];
-            const repoName = repoMatch[2].replace(/\.git$/, '');
+            let repoUrl;
+            try {
+              repoUrl = new URL(repoUrlMatch[0].replace(/[.,;:]+$/, ''));
+            } catch (error) {
+              core.setFailed(`Invalid GitHub repository URL: ${repoUrlMatch[0]}`);
+              return;
+            }
+            const pathParts = repoUrl.pathname.split('/').filter(Boolean);
+            if (repoUrl.hostname !== 'github.com' || pathParts.length < 2) {
+              core.setFailed(`Not a GitHub repository URL: ${repoUrl.toString()}`);
+              return;
+            }
+            const repoOwner = pathParts[0];
+            const repoName = pathParts[1].replace(/\.git$/, '');
+            const namePattern = /^[A-Za-z0-9_.-]+$/;
+            if (!namePattern.test(repoOwner) || !namePattern.test(repoName)) {
+              core.setFailed(`Invalid GitHub repository owner/name: ${repoOwner}/${repoName}`);
+              return;
+            }
             core.setOutput('repo_owner', repoOwner);
             core.setOutput('repo_name', repoName);
             core.setOutput('repo_full', `${repoOwner}/${repoName}`);
@@ -60,7 +111,7 @@ jobs:
 
       - name: Determine volume and issue number
         id: volume
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             // Count previously accepted+closed papers for sequential numbering
@@ -82,13 +133,13 @@ jobs:
 
       - name: Fork repo into org
         id: fork
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
           script: |
             const org = 'ai-driven-energy-research';
-            const owner = '${{ steps.extract.outputs.repo_owner }}';
-            const repo = '${{ steps.extract.outputs.repo_name }}';
+            const owner = ${{ toJson(steps.extract.outputs.repo_owner) }};
+            const repo = ${{ toJson(steps.extract.outputs.repo_name) }};
 
             // Check if fork already exists
             try {
@@ -114,15 +165,15 @@ jobs:
 
       - name: Create release to trigger Zenodo DOI
         id: release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
           script: |
             const org = 'ai-driven-energy-research';
-            const repo = '${{ steps.extract.outputs.repo_name }}';
-            const title = '${{ steps.extract.outputs.paper_title }}';
-            const issueNum = '${{ steps.extract.outputs.issue_number }}';
-            const volumeLabel = '${{ steps.volume.outputs.volume_label }}';
+            const repo = ${{ toJson(steps.extract.outputs.repo_name) }};
+            const title = ${{ toJson(steps.extract.outputs.paper_title) }};
+            const issueNum = ${{ toJson(steps.extract.outputs.issue_number) }};
+            const volumeLabel = ${{ toJson(steps.volume.outputs.volume_label) }};
 
             // Check if release already exists
             try {
@@ -198,21 +249,28 @@ jobs:
           echo "doi_url=" >> "$GITHUB_OUTPUT"
 
       - name: Update journal website
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.ORG_ADMIN_TOKEN }}
           script: |
             const org = 'ai-driven-energy-research';
             const websiteRepo = 'ai-driven-energy-research.github.io';
-            const repo = '${{ steps.extract.outputs.repo_name }}';
-            const title = '${{ steps.extract.outputs.paper_title }}';
-            const firstAuthor = '${{ steps.extract.outputs.first_author }}';
-            const firstAffiliation = '${{ steps.extract.outputs.first_affiliation }}';
-            const forkUrl = '${{ steps.fork.outputs.fork_url }}';
-            const volumeLabel = '${{ steps.volume.outputs.volume_label }}';
-            const doi = '${{ steps.zenodo.outputs.doi }}';
-            const doiUrl = '${{ steps.zenodo.outputs.doi_url }}';
-            const issueNum = '${{ steps.extract.outputs.issue_number }}';
+            const repo = ${{ toJson(steps.extract.outputs.repo_name) }};
+            const title = ${{ toJson(steps.extract.outputs.paper_title) }};
+            const firstAuthor = ${{ toJson(steps.extract.outputs.first_author) }};
+            const firstAffiliation = ${{ toJson(steps.extract.outputs.first_affiliation) }};
+            const forkUrl = ${{ toJson(steps.fork.outputs.fork_url) }};
+            const volumeLabel = ${{ toJson(steps.volume.outputs.volume_label) }};
+            const doi = ${{ toJson(steps.zenodo.outputs.doi) }};
+            const doiUrl = ${{ toJson(steps.zenodo.outputs.doi_url) }};
+            const issueNum = ${{ toJson(steps.extract.outputs.issue_number) }};
+            const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, char => ({
+              '&': '&amp;',
+              '<': '&lt;',
+              '>': '&gt;',
+              '"': '&quot;',
+              "'": '&#39;',
+            }[char]));
 
             // Read current index.html
             const file = await github.rest.repos.getContent({
@@ -223,31 +281,31 @@ jobs:
             let content = Buffer.from(file.data.content, 'base64').toString('utf8');
 
             // Skip if paper already listed
-            if (content.includes(title)) {
+            if (content.includes(title) || content.includes(forkUrl)) {
               console.log('Paper already listed on website, skipping.');
               return;
             }
 
             // Build author display
             const authorDisplay = firstAffiliation
-              ? `${firstAuthor} &mdash; ${firstAffiliation}`
-              : firstAuthor;
+              ? `${escapeHtml(firstAuthor)} &mdash; ${escapeHtml(firstAffiliation)}`
+              : escapeHtml(firstAuthor);
 
             // Build links row
             const links = [
-              `<a href="${forkUrl}">Repository</a>`,
-              `<a href="${forkUrl}/tree/main/paper">Manuscript</a>`,
-              `<a href="${forkUrl}/tree/main/process-log">Process Log</a>`,
+              `<a href="${escapeHtml(forkUrl)}">Repository</a>`,
+              `<a href="${escapeHtml(forkUrl)}/tree/main/paper">Manuscript</a>`,
+              `<a href="${escapeHtml(forkUrl)}/tree/main/process-log">Process Log</a>`,
               `<a href="https://github.com/ai-driven-energy-research/submissions/issues/${issueNum}">Review</a>`,
             ];
             if (doi) {
-              links.push(`<a href="${doiUrl}">DOI: ${doi}</a>`);
+              links.push(`<a href="${escapeHtml(doiUrl)}">DOI: ${escapeHtml(doi)}</a>`);
             }
 
             const paperEntry = [
               '        <div class="board-member" style="margin-top:12px;">',
-              `            <div class="board-role">${volumeLabel}</div>`,
-              `            <div class="name">${title}</div>`,
+              `            <div class="board-role">${escapeHtml(volumeLabel)}</div>`,
+              `            <div class="name">${escapeHtml(title)}</div>`,
               `            <div class="affiliation">${authorDisplay}</div>`,
               '            <div style="margin-top:8px; font-family:\'Inter\',sans-serif; font-size:0.82em;">',
               `                ${links.join(' &middot; ')}`,
@@ -292,15 +350,16 @@ jobs:
             console.log('Website updated.');
 
       - name: Post publication comment and close issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
-            const forkUrl = '${{ steps.fork.outputs.fork_url }}';
-            const releaseUrl = '${{ steps.release.outputs.release_url }}';
-            const title = '${{ steps.extract.outputs.paper_title }}';
-            const volumeLabel = '${{ steps.volume.outputs.volume_label }}';
-            const doi = '${{ steps.zenodo.outputs.doi }}';
-            const doiUrl = '${{ steps.zenodo.outputs.doi_url }}';
+            const forkUrl = ${{ toJson(steps.fork.outputs.fork_url) }};
+            const releaseUrl = ${{ toJson(steps.release.outputs.release_url) }};
+            const title = ${{ toJson(steps.extract.outputs.paper_title) }};
+            const volumeLabel = ${{ toJson(steps.volume.outputs.volume_label) }};
+            const doi = ${{ toJson(steps.zenodo.outputs.doi) }};
+            const doiUrl = ${{ toJson(steps.zenodo.outputs.doi_url) }};
+            const issueNum = Number(${{ toJson(steps.extract.outputs.issue_number) }});
 
             const doiRow = doi
               ? `| Zenodo DOI | [${doi}](${doiUrl}) |`
@@ -309,7 +368,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: issueNum,
               body: [
                 '## Paper Published',
                 '',
@@ -335,7 +394,7 @@ jobs:
             await github.rest.issues.update({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: issueNum,
               state: 'closed',
             });
 
