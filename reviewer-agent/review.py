@@ -231,17 +231,14 @@ IMPORTANT RULES:
 
 
 def call_llm(prompt: str) -> str:
-    """Send prompt to Groq and get the pre-screening report."""
-    from groq import Groq
+    """Send prompt to Groq and get the pre-screening report.
 
-    client = Groq()
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4096,
-        temperature=0.3,
-    )
-    return response.choices[0].message.content
+    Delegates to the shared client, which keeps the request within the free-tier
+    TPM limit (truncating the prompt if needed) and retries transient bursts.
+    """
+    from llm import call_groq
+
+    return call_groq(prompt)
 
 
 def post_github_comment(issue_number: int, body: str):

@@ -215,7 +215,7 @@ def check_reference_accessibility(refs: list[dict], max_checks: int = 30) -> lis
 
 def analyze_claims_with_llm(claims: list[dict], abstract: str) -> str:
     """Send claims to Groq for analysis."""
-    from groq import Groq
+    from llm import call_groq
 
     if not claims:
         return "No bold claims detected in the manuscript."
@@ -264,14 +264,7 @@ Respond in this exact markdown format:
 [Any overall observations about the claim patterns — e.g., "Paper makes 3 first-ever claims but cites no prior surveys in Section 2"]
 """
 
-    client = Groq()
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=3000,
-        temperature=0.2,
-    )
-    return response.choices[0].message.content
+    return call_groq(prompt, max_tokens=2500, temperature=0.2)
 
 
 # ---------------------------------------------------------------------------
