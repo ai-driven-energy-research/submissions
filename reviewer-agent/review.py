@@ -11,7 +11,7 @@ Usage:
     python review.py --repo-url <github-repo-url> --issue-number <n>
 
 Requires:
-    GROQ_API_KEY - Groq API key (free tier)
+    ANTHROPIC_API_KEY - Anthropic API key
     GITHUB_TOKEN - GitHub token with issues:write permission
 """
 
@@ -231,17 +231,16 @@ IMPORTANT RULES:
 
 
 def call_llm(prompt: str) -> str:
-    """Send prompt to Groq and get the pre-screening report."""
-    from groq import Groq
+    """Send prompt to Anthropic and get the pre-screening report."""
+    import anthropic
 
-    client = Groq()
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
         max_tokens=4096,
-        temperature=0.3,
+        messages=[{"role": "user", "content": prompt}],
     )
-    return response.choices[0].message.content
+    return response.content[0].text
 
 
 def post_github_comment(issue_number: int, body: str):

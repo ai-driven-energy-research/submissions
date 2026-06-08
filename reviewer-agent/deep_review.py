@@ -11,7 +11,7 @@ Usage:
     python deep_review.py --repo-url <url> --issue-number <n>
 
 Requires:
-    GROQ_API_KEY - Groq API key
+    ANTHROPIC_API_KEY - Anthropic API key
     GITHUB_TOKEN - GitHub token with issues:write permission
 """
 
@@ -214,8 +214,8 @@ def check_reference_accessibility(refs: list[dict], max_checks: int = 30) -> lis
 # ---------------------------------------------------------------------------
 
 def analyze_claims_with_llm(claims: list[dict], abstract: str) -> str:
-    """Send claims to Groq for analysis."""
-    from groq import Groq
+    """Send claims to Anthropic for analysis."""
+    import anthropic
 
     if not claims:
         return "No bold claims detected in the manuscript."
@@ -264,14 +264,13 @@ Respond in this exact markdown format:
 [Any overall observations about the claim patterns — e.g., "Paper makes 3 first-ever claims but cites no prior surveys in Section 2"]
 """
 
-    client = Groq()
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
         max_tokens=3000,
-        temperature=0.2,
+        messages=[{"role": "user", "content": prompt}],
     )
-    return response.choices[0].message.content
+    return response.content[0].text
 
 
 # ---------------------------------------------------------------------------
