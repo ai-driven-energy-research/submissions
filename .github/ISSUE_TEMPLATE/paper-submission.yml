@@ -82,7 +82,7 @@ body:
     attributes:
       label: Primary Topic Area
       options:
-        - Machine learning for CFD
+        - Machine learning for CFD and turbulence modelling
         - AI-driven grid optimisation
         - Reinforcement learning for energy control
         - Generative models for materials discovery
