@@ -280,10 +280,35 @@ jobs:
 
             let content = Buffer.from(file.data.content, 'base64').toString('utf8');
 
-            // Skip if paper already listed
-            if (content.includes(title) || content.includes(forkUrl)) {
-              console.log('Paper already listed on website, skipping.');
-              return;
+            // Derive the article number + hosted PDF path from the volume label.
+            const artMatch = /No\.\s*(\d+)/.exec(volumeLabel);
+            const artNum = artMatch ? artMatch[1] : String(issueNum);
+            const pdfPath = `papers/vol1-art${artNum}-${repo}.pdf`;
+
+            // Host the full-text PDF: copy it from the accepted org repo into the website.
+            let pdfHref = `${escapeHtml(forkUrl)}/blob/main/paper/main.pdf`;
+            try {
+              const dir = await github.rest.repos.getContent({ owner: org, repo, path: 'paper' });
+              const entries = Array.isArray(dir.data) ? dir.data : [];
+              const pdfFile = entries.find(f => f.name === 'main.pdf')
+                || entries.find(f => f.name.toLowerCase().endsWith('.pdf'));
+              if (pdfFile) {
+                const blob = await github.rest.git.getBlob({ owner: org, repo, file_sha: pdfFile.sha });
+                let existingPdfSha;
+                try {
+                  const ex = await github.rest.repos.getContent({ owner: org, repo: websiteRepo, path: pdfPath });
+                  existingPdfSha = ex.data.sha;
+                } catch (e) { /* not hosted yet */ }
+                await github.rest.repos.createOrUpdateFileContents({
+                  owner: org, repo: websiteRepo, path: pdfPath,
+                  message: `Host full-text PDF for ${volumeLabel}`,
+                  content: blob.data.content.replace(/\n/g, ''), sha: existingPdfSha,
+                });
+                pdfHref = pdfPath;
+                console.log(`Hosted PDF at ${pdfPath}`);
+              }
+            } catch (e) {
+              console.log(`Could not host PDF (${e.message}); linking to the repo copy instead.`);
             }
 
             // Build author display
@@ -291,10 +316,10 @@ jobs:
               ? `${escapeHtml(firstAuthor)} &mdash; ${escapeHtml(firstAffiliation)}`
               : escapeHtml(firstAuthor);
 
-            // Build links row
+            // Build links row (hosted full-text PDF, org repo, process log, review, DOI)
             const links = [
+              `<a href="${pdfHref}"><strong>PDF (Full Text)</strong></a>`,
               `<a href="${escapeHtml(forkUrl)}">Repository</a>`,
-              `<a href="${escapeHtml(forkUrl)}/tree/main/paper">Manuscript</a>`,
               `<a href="${escapeHtml(forkUrl)}/tree/main/process-log">Process Log</a>`,
               `<a href="https://github.com/ai-driven-energy-research/submissions/issues/${issueNum}">Review</a>`,
             ];
@@ -304,7 +329,7 @@ jobs:
 
             const paperEntry = [
               '        <div class="board-member" style="margin-top:12px;">',
-              `            <div class="board-role">${escapeHtml(volumeLabel)}</div>`,
+              `            <div class="board-role">Article ${escapeHtml(artNum)}</div>`,
               `            <div class="name">${escapeHtml(title)}</div>`,
               `            <div class="affiliation">${authorDisplay}</div>`,
               '            <div style="margin-top:8px; font-family:\'Inter\',sans-serif; font-size:0.82em;">',
@@ -315,26 +340,26 @@ jobs:
 
             const originalContent = content;
 
-            // Replace empty placeholder or append after existing papers
-            const emptyPapersPattern = /<div class="papers-empty">[\s\S]*?<\/div>/;
-            if (emptyPapersPattern.test(content)) {
-              content = content.replace(emptyPapersPattern, paperEntry);
+            // Flip an existing "In Peer Review" entry to published; else append after the last article.
+            const blockRe = /<div class="board-member" style="margin-top:12px;">[\s\S]*?<\/div>\s*<\/div>/g;
+            const blocks = content.match(blockRe) || [];
+            const existing = blocks.find(b => b.includes(title) || (forkUrl && b.includes(forkUrl)));
+
+            if (existing && existing.includes(pdfPath)) {
+              console.log('Paper already published on website, skipping.');
+              return;
+            } else if (existing) {
+              content = content.replace(existing, paperEntry);            // flip under-review -> published
+            } else if (blocks.length) {
+              const last = blocks[blocks.length - 1];
+              content = content.replace(last, last + '\n' + paperEntry);  // append a new article
             } else {
-              // Append before the closing tags of the papers container
-              const marker = '<!-- end-papers -->';
-              if (content.includes(marker)) {
-                content = content.replace(marker, paperEntry + '\n' + marker);
-              } else {
-                // Fallback: insert after the section-lead paragraph
-                content = content.replace(
-                  /(<p class="section-lead">Each paper is a GitHub repository[\s\S]*?<\/p>)/,
-                  `$1\n${paperEntry}`
-                );
-              }
+              core.setFailed('Could not locate any paper-entry block in index.html.');
+              return;
             }
 
             if (content === originalContent) {
-              core.setFailed('Could not locate the published-papers insertion point in index.html.');
+              core.setFailed('index.html was not modified (entry build/flip failed).');
               return;
             }
 
